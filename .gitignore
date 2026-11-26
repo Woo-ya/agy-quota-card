@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.zip
+daemon.log
+.quota-accounts.json
+*.tmp
+.DS_Store
+Thumbs.db

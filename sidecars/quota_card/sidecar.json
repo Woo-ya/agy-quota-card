@@ -1,0 +1,10 @@
+{
+  "command": "node",
+  "args": [
+    "daemon.mjs"
+  ],
+  "restart_policy": "always",
+  "display_name": "AGY Quota Card",
+  "description": "Renders a compact model quota and multi-account usage card at the bottom of Antigravity's left sidebar.",
+  "has_web_ui": false
+}

@@ -1,0 +1,10 @@
+{
+  "name": "agy-quota-card",
+  "displayName": "AGY Quota Card",
+  "version": "1.0.0",
+  "description": "Compact left-sidebar model & quota usage card for Antigravity with multi-account overview/switching, external pool support, and real-time recovery countdown when quota is exhausted.",
+  "author": "Woo-ya",
+  "homepage": "https://github.com/Woo-ya/agy-quota-card",
+  "repository": "https://github.com/Woo-ya/agy-quota-card",
+  "logo": "assets/logo.svg"
+}
