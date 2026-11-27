@@ -91,20 +91,51 @@ export function createQuotaService({
   let lastLocalError = '';
   const poolCache = new Map(); // poolId -> { fetchedAt, accounts, status, error }
 
+  function prunePhantomLocalAccounts(list, currentSelectedId = '') {
+    const arr = Array.isArray(list) ? list : [];
+    const hasIdentified = arr.some((a) => a && a.id && a.id !== 'local:default' && (a.email || a.hasIdentity));
+    const seen = new Set();
+    const cleaned = [];
+    for (const acc of arr) {
+      if (!acc || !acc.id) continue;
+      // Drop anonymous local:default phantom once any identified local account exists
+      if (hasIdentified && acc.id === 'local:default' && !acc.email) {
+        continue;
+      }
+      if (seen.has(acc.id)) continue;
+      seen.add(acc.id);
+      cleaned.push(acc);
+    }
+    let nextSelected = currentSelectedId;
+    if (hasIdentified && nextSelected === 'local:default') {
+      nextSelected = cleaned[0]?.id || '';
+    }
+    return { cleaned, nextSelected, changed: cleaned.length !== arr.length || nextSelected !== currentSelectedId };
+  }
+
   function loadState() {
     if (!storePath) return structuredClone(defaultState);
     const loaded = safeReadJson(storePath, null);
     if (!loaded) return structuredClone(defaultState);
-    return {
+    const rawLocal = Array.isArray(loaded.localAccounts) ? loaded.localAccounts.slice(0, MAX_LOCAL_HISTORY) : [];
+    const rawSel = typeof loaded.selectedAccountId === 'string' ? loaded.selectedAccountId : '';
+    const { cleaned, nextSelected, changed } = prunePhantomLocalAccounts(rawLocal, rawSel);
+    const nextState = {
       version: 1,
-      selectedAccountId: typeof loaded.selectedAccountId === 'string' ? loaded.selectedAccountId : '',
+      selectedAccountId: nextSelected,
       selectedGroup: loaded.selectedGroup === 'claude' ? 'claude' : 'gemini',
       collapsed: Boolean(loaded.collapsed),
-      localAccounts: Array.isArray(loaded.localAccounts) ? loaded.localAccounts.slice(0, MAX_LOCAL_HISTORY) : [],
+      localAccounts: cleaned,
       manualAccounts: Array.isArray(loaded.manualAccounts) ? loaded.manualAccounts.slice(0, MAX_MANUAL_ACCOUNTS) : [],
       poolSources: Array.isArray(loaded.poolSources) ? loaded.poolSources.slice(0, MAX_POOL_SOURCES) : [],
       overrides: loaded.overrides && typeof loaded.overrides === 'object' ? loaded.overrides : {},
     };
+    if (changed) {
+      try {
+        atomicWriteJson(storePath, nextState);
+      } catch {}
+    }
+    return nextState;
   }
 
   function saveState() {
@@ -156,25 +187,32 @@ export function createQuotaService({
         lastLocalFetchAt = now;
         lastLocalError = '';
 
-        // Upsert into persisted localAccounts history so switching accounts keeps previous snapshots
-        const idx = state.localAccounts.findIndex((a) => a.id === parsed.id);
-        const existing = idx >= 0 ? state.localAccounts[idx] : null;
-        const mergedRecord = {
-          ...(existing || {}),
-          ...parsed,
-          alias: existing?.alias || '',
-          isActiveLocal: true,
-        };
-        if (idx >= 0) {
-          state.localAccounts[idx] = mergedRecord;
-        } else {
-          state.localAccounts.unshift(mergedRecord);
-          if (state.localAccounts.length > MAX_LOCAL_HISTORY) {
-            state.localAccounts = state.localAccounts.slice(0, MAX_LOCAL_HISTORY);
+        // Never persist anonymous fallback (`local:default` without email/name) into localAccounts,
+        // because GetUserStatus may temporarily lag behind RetrieveUserQuotaSummary on startup/switch.
+        if (parsed.hasIdentity !== false && parsed.id !== 'local:default') {
+          const idx = state.localAccounts.findIndex((a) => a.id === parsed.id);
+          const existing = idx >= 0 ? state.localAccounts[idx] : null;
+          const mergedRecord = {
+            ...(existing || {}),
+            ...parsed,
+            alias: existing?.alias || '',
+            isActiveLocal: true,
+          };
+          if (idx >= 0) {
+            state.localAccounts[idx] = mergedRecord;
+          } else {
+            state.localAccounts.unshift(mergedRecord);
+            if (state.localAccounts.length > MAX_LOCAL_HISTORY) {
+              state.localAccounts = state.localAccounts.slice(0, MAX_LOCAL_HISTORY);
+            }
           }
+          const pruned = prunePhantomLocalAccounts(state.localAccounts, state.selectedAccountId);
+          state.localAccounts = pruned.cleaned;
+          state.selectedAccountId = pruned.nextSelected;
+          saveState();
+          return mergedRecord;
         }
-        saveState();
-        return mergedRecord;
+        return parsed;
       }
 
       lastLocalError = '未读取到 Antigravity 额度响应';
@@ -476,11 +514,46 @@ export function createQuotaService({
     };
   }
 
+  function mergeAccounts({ sourceAccountId, targetAccountId } = {}) {
+    const srcId = String(sourceAccountId || '').trim();
+    const dstId = String(targetAccountId || '').trim();
+    if (!srcId || !dstId || srcId === dstId) {
+      return { ok: false, error: 'INVALID_MERGE_TARGETS' };
+    }
+    if (lastLiveLocal && lastLiveLocal.id === srcId) {
+      return { ok: false, error: 'CANNOT_MERGE_ACTIVE_AS_SOURCE' };
+    }
+    const srcAcc = state.localAccounts.find((a) => a.id === srcId) || state.manualAccounts.find((a) => a.id === srcId);
+    const dstAcc =
+      (lastLiveLocal && lastLiveLocal.id === dstId ? lastLiveLocal : null) ||
+      state.localAccounts.find((a) => a.id === dstId) ||
+      state.manualAccounts.find((a) => a.id === dstId);
+    if (!srcAcc || !dstAcc) {
+      return { ok: false, error: 'ACCOUNT_NOT_FOUND' };
+    }
+
+    // Preserve alias if target has none
+    const srcAlias = state.overrides[srcId]?.alias || srcAcc.alias || '';
+    if (srcAlias && !state.overrides[dstId]?.alias && !dstAcc.alias) {
+      state.overrides[dstId] = { ...(state.overrides[dstId] || {}), alias: srcAlias };
+    }
+
+    state.localAccounts = state.localAccounts.filter((a) => a.id !== srcId);
+    state.manualAccounts = state.manualAccounts.filter((a) => a.id !== srcId);
+    delete state.overrides[srcId];
+    if (state.selectedAccountId === srcId) {
+      state.selectedAccountId = dstId;
+    }
+    saveState();
+    return { ok: true, mergedInto: dstId };
+  }
+
   return {
     getOverview,
     setUiPrefs,
     updateAccountOverride,
     removeAccount,
+    mergeAccounts,
     upsertManualAccount,
     upsertPoolSource,
     removePoolSource,

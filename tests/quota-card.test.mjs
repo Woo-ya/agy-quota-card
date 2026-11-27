@@ -295,3 +295,75 @@ test('buildInjectBundle produces syntactically valid JS bundle', () => {
   assert.ok(bundle.hash && bundle.hash.length === 16);
   assert.doesNotThrow(() => new vm.Script(bundle.source));
 });
+
+test('createQuotaService never persists anonymous local:default and auto-prunes legacy phantom records', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-qc-dedup-'));
+  const storePath = path.join(tmpDir, 'store.json');
+
+  // Seed legacy store containing a phantom local:default alongside a real account
+  fs.writeFileSync(
+    storePath,
+    JSON.stringify({
+      version: 1,
+      selectedAccountId: 'local:default',
+      localAccounts: [
+        { id: 'local:default', email: '', name: 'Antigravity 账号', groups: {} },
+        { id: 'local:real@gmail.com', email: 'real@gmail.com', name: 'Real User', groups: {} },
+      ],
+    }),
+    'utf8'
+  );
+
+  let userReady = false;
+  const mockFetch = async (url) => {
+    if (String(url).includes('RetrieveUserQuotaSummary')) {
+      return {
+        ok: true,
+        json: async () => ({
+          response: {
+            groups: [{ displayName: 'Gemini Models', buckets: [{ window: '5h', remainingFraction: 0.8 }] }],
+          },
+        }),
+      };
+    }
+    if (String(url).includes('GetUserStatus')) {
+      if (!userReady) return { ok: false, status: 503, json: async () => ({}) };
+      return {
+        ok: true,
+        json: async () => ({ userStatus: { name: 'Real User', email: 'real@gmail.com' } }),
+      };
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  try {
+    const svc = createQuotaService({
+      storePath,
+      fetchImpl: mockFetch,
+      env: { ANTIGRAVITY_LS_ADDRESS: 'localhost:5387', ANTIGRAVITY_CSRF_TOKEN: 'csrf' },
+      nowFn: () => BASE_NOW,
+    });
+
+    // Legacy local:default should be pruned immediately on load
+    assert.equal(svc.getStateForTests().localAccounts.length, 1);
+    assert.equal(svc.getStateForTests().selectedAccountId, 'local:real@gmail.com');
+
+    // When GetUserStatus temporarily fails, local:default must NOT be persisted
+    await svc.getOverview({ force: true });
+    assert.equal(svc.getStateForTests().localAccounts.length, 1);
+
+    // Once GetUserStatus recovers, real account updates cleanly
+    userReady = true;
+    const ov = await svc.getOverview({ force: true });
+    assert.equal(ov.accounts.filter((a) => a.id === 'local:default').length, 0);
+
+    // Test manual/historical mergeAccounts
+    svc.upsertManualAccount({ id: 'manual:dup1', name: 'Backup Alias', gemini5hPct: '50' });
+    const merged = svc.mergeAccounts({ sourceAccountId: 'manual:dup1', targetAccountId: 'local:real@gmail.com' });
+    assert.equal(merged.ok, true);
+    assert.equal(svc.getStateForTests().manualAccounts.length, 0);
+    assert.equal(svc.getStateForTests().overrides['local:real@gmail.com']?.alias, 'Backup Alias');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

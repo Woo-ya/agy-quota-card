@@ -433,9 +433,11 @@
       return null;
     }
 
+    const hasIdentity = Boolean(email || name);
     const id = email ? `local:${email}` : `local:${name || 'default'}`;
     return {
       id,
+      hasIdentity,
       source: 'local',
       sourceLabel: '本机登录',
       poolId: '',

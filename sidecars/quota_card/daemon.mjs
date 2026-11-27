@@ -52,6 +52,9 @@ async function dispatchRpc(action, params) {
   if (action === 'qc-remove-account') {
     return quotaService.removeAccount(params || {});
   }
+  if (action === 'qc-merge-accounts') {
+    return quotaService.mergeAccounts(params || {});
+  }
   if (action === 'qc-upsert-manual-account') {
     return quotaService.upsertManualAccount(params || {});
   }

@@ -1058,6 +1058,18 @@
       }
     }
 
+    async function handleMergeIntoActive(sourceAccountId, targetAccountId) {
+      const res = await callRpc('qc-merge-accounts', { sourceAccountId, targetAccountId });
+      if (res?.ok) {
+        modalMessage = '已将重复记录合并到当前登录账号';
+        modalError = '';
+        await fetchOverview(false);
+      } else {
+        modalError = `合并失败: ${res?.error || '未知错误'}`;
+        renderModal();
+      }
+    }
+
     async function handleAddManualAccount() {
       const res = await callRpc('qc-upsert-manual-account', manualForm);
       if (res?.ok) {
@@ -1273,6 +1285,17 @@
             renderModal();
           });
           right.appendChild(aliasBtn);
+
+          const activeLocal = (overview.accounts || []).find((a) => a.isActiveLocal);
+          if (!acc.isActiveLocal && acc.source !== 'pool' && activeLocal) {
+            const mergeBtn = doc.createElement('button');
+            mergeBtn.type = 'button';
+            mergeBtn.className = 'ag-qc-btn-ghost ag-qc-btn-xs';
+            mergeBtn.title = `合并并清理到当前账号 (${core.getAccountDisplayName(activeLocal)})`;
+            mergeBtn.textContent = '合并到当前';
+            mergeBtn.addEventListener('click', () => void handleMergeIntoActive(acc.id, activeLocal.id));
+            right.appendChild(mergeBtn);
+          }
 
           if (!acc.isActiveLocal && acc.source !== 'pool') {
             const delBtn = doc.createElement('button');
