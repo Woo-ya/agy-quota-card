@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.zip
 daemon.log
+.daemon.pid
 .quota-accounts.json
 *.tmp
 .DS_Store

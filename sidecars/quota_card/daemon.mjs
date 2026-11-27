@@ -19,6 +19,7 @@ import { createQuotaService } from './quota-service.mjs';
 
 const POLL_INTERVAL_MS = 3000;
 const LOG_FILE = path.join(PLUGIN_ROOT, 'daemon.log');
+const PID_FILE = path.join(PLUGIN_ROOT, '.daemon.pid');
 const STORE_FILE = path.join(PLUGIN_ROOT, '.quota-accounts.json');
 
 const quotaService = createQuotaService({ storePath: STORE_FILE });
@@ -210,22 +211,41 @@ async function scanOnce() {
 
 function startWatchers() {
   const srcDir = path.join(PLUGIN_ROOT, 'src');
-  if (!fs.existsSync(srcDir)) return;
-  try {
-    const w = fs.watch(srcDir, { recursive: true }, () => {
-      if (shuttingDown) return;
-      clearTimeout(reloadDebounce);
-      reloadDebounce = setTimeout(() => {
-        try {
-          currentBundle = buildInjectBundle(PLUGIN_ROOT);
-          void scanOnce();
-        } catch (err) {
-          log(`[warn] Bundle rebuild error: ${err?.message || err}`);
-        }
-      }, 250);
-    });
-    watchers.push(w);
-  } catch {}
+  if (fs.existsSync(srcDir)) {
+    try {
+      const w = fs.watch(srcDir, { recursive: true }, () => {
+        if (shuttingDown) return;
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(() => {
+          try {
+            currentBundle = buildInjectBundle(PLUGIN_ROOT);
+            void scanOnce();
+          } catch (err) {
+            log(`[warn] Bundle rebuild error: ${err?.message || err}`);
+          }
+        }, 250);
+      });
+      watchers.push(w);
+    } catch {}
+  }
+
+  // Watch sidecar backend files so updates trigger a clean exit and Antigravity
+  // (restart_policy: always) respawns the sidecar with the updated quota-service.mjs.
+  const sidecarDir = path.join(PLUGIN_ROOT, 'sidecars', 'quota_card');
+  if (fs.existsSync(sidecarDir)) {
+    try {
+      let restartTimer = null;
+      const sw = fs.watch(sidecarDir, (eventType, filename) => {
+        if (shuttingDown) return;
+        if (filename && !String(filename).endsWith('.mjs')) return;
+        clearTimeout(restartTimer);
+        restartTimer = setTimeout(() => {
+          void shutdown('SIDECAR_UPDATED');
+        }, 350);
+      });
+      watchers.push(sw);
+    } catch {}
+  }
 }
 
 async function shutdown(signal) {
@@ -265,6 +285,11 @@ async function shutdown(signal) {
   }
   await Promise.allSettled(cleanupTasks);
   attached.clear();
+  try {
+    if (fs.existsSync(PID_FILE) && fs.readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) {
+      fs.unlinkSync(PID_FILE);
+    }
+  } catch {}
   process.exit(0);
 }
 
@@ -276,7 +301,10 @@ for (const stream of [process.stdout, process.stderr]) {
   });
 }
 
-log(`[boot] AGY Quota Card sidecar started (bundle=${currentBundle.hash})`);
+try {
+  fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
+} catch {}
+log(`[boot] AGY Quota Card sidecar started (pid=${process.pid}, bundle=${currentBundle.hash})`);
 startWatchers();
 void scanOnce();
 scanTimer = setInterval(() => void scanOnce(), POLL_INTERVAL_MS);

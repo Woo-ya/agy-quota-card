@@ -25,6 +25,19 @@ for (const item of COPY_ITEMS) {
 
 console.log(`[ok] Installed plugin to: ${TARGET_DIR}`);
 
+// If a previous sidecar daemon recorded its PID, stop it so Antigravity respawns
+// it with the newly deployed sidecar code.
+const pidFile = path.join(TARGET_DIR, '.daemon.pid');
+try {
+  if (fs.existsSync(pidFile)) {
+    const oldPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+    if (Number.isInteger(oldPid) && oldPid > 0 && oldPid !== process.pid) {
+      process.kill(oldPid);
+      console.log(`[ok] Signaled previous sidecar (pid=${oldPid}) to restart.`);
+    }
+  }
+} catch {}
+
 if (!process.argv.includes('--no-inject')) {
   try {
     execFileSync(process.execPath, [path.join(TARGET_DIR, 'scripts', 'inject.mjs')], {
