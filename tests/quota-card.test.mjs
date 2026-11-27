@@ -358,7 +358,7 @@ test('createQuotaService never persists anonymous local:default and auto-prunes 
     assert.equal(ov.accounts.filter((a) => a.id === 'local:default').length, 0);
 
     // Test manual/historical mergeAccounts
-    svc.upsertManualAccount({ id: 'manual:dup1', name: 'Backup Alias', gemini5hPct: '50' });
+    svc.upsertManualAccount({ id: 'manual:dup1', name: 'Dup Account', alias: 'Backup Alias', gemini5hPct: '50' });
     const merged = svc.mergeAccounts({ sourceAccountId: 'manual:dup1', targetAccountId: 'local:real@gmail.com' });
     assert.equal(merged.ok, true);
     assert.equal(svc.getStateForTests().manualAccounts.length, 0);
