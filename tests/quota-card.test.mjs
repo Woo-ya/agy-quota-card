@@ -248,13 +248,14 @@ test('createQuotaService tracks multi-account login switches, external pools, an
       nowFn: () => BASE_NOW,
     });
 
-    // 1. Capture Account A
+    // 1. Capture Account A -> auto-selected
     const ov1 = await svc.getOverview({ force: true });
     assert.equal(ov1.ok, true);
     assert.equal(ov1.accounts.length, 1);
     assert.equal(ov1.accounts[0].email, 'a@gmail.com');
+    assert.equal(ov1.selectedAccountId, 'local:a@gmail.com');
 
-    // 2. Simulate switching Google login in Antigravity to Account B
+    // 2. Simulate switching Google login in Antigravity to Account B -> auto-switches selectedAccountId!
     activeUser = 'b@gmail.com';
     const ov2 = await svc.getOverview({ force: true });
     assert.equal(ov2.accounts.length, 2);
@@ -262,6 +263,20 @@ test('createQuotaService tracks multi-account login switches, external pools, an
     assert.equal(ov2.accounts[0].isActiveLocal, true);
     assert.equal(ov2.accounts[1].email, 'a@gmail.com');
     assert.equal(ov2.accounts[1].isActiveLocal, false);
+    assert.equal(ov2.selectedAccountId, 'local:b@gmail.com');
+
+    // 2b. Manual peek at Account A while still signed into Account B is preserved across polls
+    svc.setUiPrefs({ selectedAccountId: 'local:a@gmail.com' });
+    const ov2b = await svc.getOverview({ force: true });
+    assert.equal(ov2b.selectedAccountId, 'local:a@gmail.com');
+
+    // 2c. Switching login back to Account A then to Account B auto-follows again
+    activeUser = 'a@gmail.com';
+    const ov2c = await svc.getOverview({ force: true });
+    assert.equal(ov2c.selectedAccountId, 'local:a@gmail.com');
+    activeUser = 'b@gmail.com';
+    const ov2d = await svc.getOverview({ force: true });
+    assert.equal(ov2d.selectedAccountId, 'local:b@gmail.com');
 
     // 3. Add external pool with secret token — verify token is NEVER echoed to UI
     const addPool = svc.upsertPoolSource({

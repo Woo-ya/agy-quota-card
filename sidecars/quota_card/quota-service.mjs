@@ -77,6 +77,7 @@ export function createQuotaService({
   const defaultState = {
     version: 1,
     selectedAccountId: '',
+    lastActiveLocalId: '',
     selectedGroup: 'gemini',
     collapsed: false,
     localAccounts: [], // Persisted local Antigravity accounts
@@ -123,6 +124,7 @@ export function createQuotaService({
     const nextState = {
       version: 1,
       selectedAccountId: nextSelected,
+      lastActiveLocalId: typeof loaded.lastActiveLocalId === 'string' ? loaded.lastActiveLocalId : '',
       selectedGroup: loaded.selectedGroup === 'claude' ? 'claude' : 'gemini',
       collapsed: Boolean(loaded.collapsed),
       localAccounts: cleaned,
@@ -190,6 +192,7 @@ export function createQuotaService({
         // Never persist anonymous fallback (`local:default` without email/name) into localAccounts,
         // because GetUserStatus may temporarily lag behind RetrieveUserQuotaSummary on startup/switch.
         if (parsed.hasIdentity !== false && parsed.id !== 'local:default') {
+          const switchedLocalLogin = Boolean(parsed.id && parsed.id !== state.lastActiveLocalId);
           const idx = state.localAccounts.findIndex((a) => a.id === parsed.id);
           const existing = idx >= 0 ? state.localAccounts[idx] : null;
           const mergedRecord = {
@@ -209,6 +212,12 @@ export function createQuotaService({
           const pruned = prunePhantomLocalAccounts(state.localAccounts, state.selectedAccountId);
           state.localAccounts = pruned.cleaned;
           state.selectedAccountId = pruned.nextSelected;
+          // Auto-follow when the signed-in Antigravity account changes, while preserving
+          // manual view selection when staying on the same signed-in account.
+          if (switchedLocalLogin) {
+            state.lastActiveLocalId = parsed.id;
+            state.selectedAccountId = parsed.id;
+          }
           saveState();
           return mergedRecord;
         }

@@ -135,12 +135,22 @@
       void controller.refresh(false);
     }, DATA_POLL_MS);
 
+    let lastFocusRefreshAt = 0;
     function onVisibilityChange() {
       if (destroyed || doc?.hidden) return;
       controller.sync();
       void controller.refresh(false);
     }
+    function onWindowFocus() {
+      if (destroyed || doc?.hidden) return;
+      const now = Date.now();
+      if (now - lastFocusRefreshAt < 2500) return;
+      lastFocusRefreshAt = now;
+      controller.sync();
+      void controller.refresh(true);
+    }
     doc?.addEventListener?.('visibilitychange', onVisibilityChange);
+    win?.addEventListener?.('focus', onWindowFocus);
 
     function destroy() {
       if (destroyed) return;
@@ -148,6 +158,7 @@
       if (pollTimer) clearInterval(pollTimer);
       if (mutObserver) mutObserver.disconnect();
       doc?.removeEventListener?.('visibilitychange', onVisibilityChange);
+      win?.removeEventListener?.('focus', onWindowFocus);
       controller.destroy();
       rpc.destroy();
       if (styleEl && styleEl.parentNode) {
